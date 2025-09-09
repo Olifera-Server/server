@@ -10,6 +10,104 @@ const {
 const router = express.Router();
 
 // Get all products with filtering and pagination
+// router.get("/", optionalAuth, async (req, res) => {
+//   try {
+//     const {
+//       page = 1,
+//       limit = 12,
+//       category,
+//       search,
+//       sortBy = "name",
+//       sortOrder = "ASC",
+//       minPrice,
+//       maxPrice,
+//     } = req.query;
+
+//     console.log(req.query);
+//     const offset = (page - 1) * limit;
+//     const params = [];
+//     let whereClause = 'WHERE p.status = "active"';
+
+//     // Add category filter
+//     if (category && category !== "All") {
+//       whereClause += " AND c.name = ?";
+//       params.push(category);
+//     }
+
+//     // Add search filter
+//     if (search) {
+//       whereClause += " AND (p.name LIKE ? OR p.description LIKE ?)";
+//       params.push(`%${search}%`, `%${search}%`);
+//     }
+
+//     // Add price filters
+//     if (minPrice) {
+//       whereClause += " AND p.price >= ?";
+//       params.push(parseFloat(minPrice));
+//     }
+//     if (maxPrice) {
+//       whereClause += " AND p.price <= ?";
+//       params.push(parseFloat(maxPrice));
+//     }
+
+//     // Validate sort parameters
+//     const allowedSortFields = ["name", "price", "rating", "created_at"];
+//     const allowedSortOrders = ["ASC", "DESC"];
+//     const sortField = allowedSortFields.includes(sortBy) ? sortBy : "name";
+//     const sortDirection = allowedSortOrders.includes(sortOrder.toUpperCase())
+//       ? sortOrder.toUpperCase()
+//       : "ASC";
+
+//     // Get products with category and primary image
+//     const productsQuery = `
+//       SELECT 
+//         p.*,
+//         c.name as category_name,
+//         pi.image_url as image
+//       FROM products p
+//       LEFT JOIN categories c ON p.category_id = c.id
+//       LEFT JOIN product_images pi ON p.id = pi.product_id AND pi.is_primary = TRUE
+//       ${whereClause}
+//       ORDER BY p.${sortField} ${sortDirection}
+//       LIMIT ? OFFSET ?
+//     `;
+
+//     console.log(productsQuery);
+
+//     const countQuery = `
+//       SELECT COUNT(*) as total
+//       FROM products p
+//       LEFT JOIN categories c ON p.category_id = c.id
+//       ${whereClause}
+//     `;
+
+//     console.log(params);
+
+//     const [products, countResult] = await Promise.all([
+//       executeQuery(productsQuery, [...params, parseInt(limit), offset]),
+//       executeQuery(countQuery, params),
+//     ]);
+
+//     const total = countResult[0].total;
+//     const totalPages = Math.ceil(total / limit);
+
+//     res.json({
+//       products,
+//       pagination: {
+//         currentPage: parseInt(page),
+//         totalPages,
+//         totalItems: total,
+//         itemsPerPage: parseInt(limit),
+//         hasNextPage: page < totalPages,
+//         hasPrevPage: page > 1,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Get products error:", error);
+//     res.status(500).json({ message: "Failed to fetch products" });
+//   }
+// });
+
 router.get("/", optionalAuth, async (req, res) => {
   try {
     const {
@@ -23,7 +121,6 @@ router.get("/", optionalAuth, async (req, res) => {
       maxPrice,
     } = req.query;
 
-    console.log(req.query);
     const offset = (page - 1) * limit;
     const params = [];
     let whereClause = 'WHERE p.status = "active"';
@@ -58,21 +155,18 @@ router.get("/", optionalAuth, async (req, res) => {
       ? sortOrder.toUpperCase()
       : "ASC";
 
-    // Get products with category and primary image
+    // **MODIFIED**: Simplified the main query to no longer fetch the primary image.
+    // We will fetch all images in a separate, more efficient query later.
     const productsQuery = `
       SELECT 
         p.*,
-        c.name as category_name,
-        pi.image_url as image
+        c.name as category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      LEFT JOIN product_images pi ON p.id = pi.product_id AND pi.is_primary = TRUE
       ${whereClause}
       ORDER BY p.${sortField} ${sortDirection}
       LIMIT ? OFFSET ?
     `;
-
-    console.log(productsQuery);
 
     const countQuery = `
       SELECT COUNT(*) as total
@@ -81,8 +175,7 @@ router.get("/", optionalAuth, async (req, res) => {
       ${whereClause}
     `;
 
-    console.log(params);
-
+    // Step 1: Execute the main product and count queries
     const [products, countResult] = await Promise.all([
       executeQuery(productsQuery, [...params, parseInt(limit), offset]),
       executeQuery(countQuery, params),
@@ -90,9 +183,72 @@ router.get("/", optionalAuth, async (req, res) => {
 
     const total = countResult[0].total;
     const totalPages = Math.ceil(total / limit);
+    
+    // If no products are found, return early.
+    if (products.length === 0) {
+        return res.json({
+            products: [],
+            pagination: {
+                currentPage: parseInt(page),
+                totalPages,
+                totalItems: total,
+                itemsPerPage: parseInt(limit),
+                hasNextPage: false,
+                hasPrevPage: page > 1,
+            },
+        });
+    }
+
+    // Step 2: Get IDs from the fetched products to query related data
+    const productIds = products.map(p => p.id);
+
+    // Step 3: Fetch all related data for the products on this page in parallel
+    const imagesQuery = 'SELECT * FROM product_images WHERE product_id IN (?) ORDER BY is_primary DESC, display_order ASC';
+    const featuresQuery = 'SELECT * FROM product_features WHERE product_id IN (?) ORDER BY display_order ASC';
+    const specsQuery = 'SELECT * FROM product_specifications WHERE product_id IN (?)';
+    
+    const [images, features, specifications] = await Promise.all([
+        executeQuery(imagesQuery, [productIds]),
+        executeQuery(featuresQuery, [productIds]),
+        executeQuery(specsQuery, [productIds]),
+    ]);
+
+    // Step 4: Map the related data back to each product for efficient lookup
+    const imagesByProductId = new Map();
+    images.forEach(image => {
+        if (!imagesByProductId.has(image.product_id)) {
+            imagesByProductId.set(image.product_id, []);
+        }
+        imagesByProductId.get(image.product_id).push(image);
+    });
+
+    const featuresByProductId = new Map();
+    features.forEach(feature => {
+        if (!featuresByProductId.has(feature.product_id)) {
+            featuresByProductId.set(feature.product_id, []);
+        }
+        // We only need the text, not the whole object
+        featuresByProductId.get(feature.product_id).push(feature.feature_text);
+    });
+
+    const specsByProductId = new Map();
+    specifications.forEach(spec => {
+        if (!specsByProductId.has(spec.product_id)) {
+            specsByProductId.set(spec.product_id, {});
+        }
+        specsByProductId.get(spec.product_id)[spec.spec_key] = spec.spec_value;
+    });
+
+    // Step 5: Combine the products with their related data
+    const finalProducts = products.map(product => ({
+      ...product,
+      images: imagesByProductId.get(product.id) || [],
+      features: featuresByProductId.get(product.id) || [],
+      specifications: specsByProductId.get(product.id) || {},
+    }));
 
     res.json({
-      products,
+      products: finalProducts,
       pagination: {
         currentPage: parseInt(page),
         totalPages,
