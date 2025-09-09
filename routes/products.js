@@ -60,7 +60,7 @@ const router = express.Router();
 
 //     // Get products with category and primary image
 //     const productsQuery = `
-//       SELECT 
+//       SELECT
 //         p.*,
 //         c.name as category_name,
 //         pi.image_url as image
@@ -183,64 +183,68 @@ router.get("/", optionalAuth, async (req, res) => {
 
     const total = countResult[0].total;
     const totalPages = Math.ceil(total / limit);
-    
+
     // If no products are found, return early.
     if (products.length === 0) {
-        return res.json({
-            products: [],
-            pagination: {
-                currentPage: parseInt(page),
-                totalPages,
-                totalItems: total,
-                itemsPerPage: parseInt(limit),
-                hasNextPage: false,
-                hasPrevPage: page > 1,
-            },
-        });
+      return res.json({
+        products: [],
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalItems: total,
+          itemsPerPage: parseInt(limit),
+          hasNextPage: false,
+          hasPrevPage: page > 1,
+        },
+      });
     }
 
     // Step 2: Get IDs from the fetched products to query related data
-    const productIds = products.map(p => p.id);
+    const productIds = products.map((p) => p.id);
 
     // Step 3: Fetch all related data for the products on this page in parallel
-    const imagesQuery = 'SELECT * FROM product_images WHERE product_id IN (?) ORDER BY is_primary DESC, display_order ASC';
-    const featuresQuery = 'SELECT * FROM product_features WHERE product_id IN (?) ORDER BY display_order ASC';
-    const specsQuery = 'SELECT * FROM product_specifications WHERE product_id IN (?)';
-    
+    const placeholders = productIds.map(() => "?").join(",");
+
+    // 2. Build the queries using the generated placeholders
+    const imagesQuery = `SELECT * FROM product_images WHERE product_id IN (${placeholders}) ORDER BY is_primary DESC, display_order ASC`;
+    const featuresQuery = `SELECT * FROM product_features WHERE product_id IN (${placeholders}) ORDER BY display_order ASC`;
+    const specsQuery = `SELECT * FROM product_specifications WHERE product_id IN (${placeholders})`;
+    console.log(productIds)
+
     const [images, features, specifications] = await Promise.all([
-        executeQuery(imagesQuery, [productIds]),
-        executeQuery(featuresQuery, [productIds]),
-        executeQuery(specsQuery, [productIds]),
+      executeQuery(imagesQuery, productIds),
+      executeQuery(featuresQuery, productIds),
+      executeQuery(specsQuery, productIds),
     ]);
 
     // Step 4: Map the related data back to each product for efficient lookup
     const imagesByProductId = new Map();
-    images.forEach(image => {
-        if (!imagesByProductId.has(image.product_id)) {
-            imagesByProductId.set(image.product_id, []);
-        }
-        imagesByProductId.get(image.product_id).push(image);
+    images.forEach((image) => {
+      if (!imagesByProductId.has(image.product_id)) {
+        imagesByProductId.set(image.product_id, []);
+      }
+      imagesByProductId.get(image.product_id).push(image);
     });
 
     const featuresByProductId = new Map();
-    features.forEach(feature => {
-        if (!featuresByProductId.has(feature.product_id)) {
-            featuresByProductId.set(feature.product_id, []);
-        }
-        // We only need the text, not the whole object
-        featuresByProductId.get(feature.product_id).push(feature.feature_text);
+    features.forEach((feature) => {
+      if (!featuresByProductId.has(feature.product_id)) {
+        featuresByProductId.set(feature.product_id, []);
+      }
+      // We only need the text, not the whole object
+      featuresByProductId.get(feature.product_id).push(feature.feature_text);
     });
 
     const specsByProductId = new Map();
-    specifications.forEach(spec => {
-        if (!specsByProductId.has(spec.product_id)) {
-            specsByProductId.set(spec.product_id, {});
-        }
-        specsByProductId.get(spec.product_id)[spec.spec_key] = spec.spec_value;
+    specifications.forEach((spec) => {
+      if (!specsByProductId.has(spec.product_id)) {
+        specsByProductId.set(spec.product_id, {});
+      }
+      specsByProductId.get(spec.product_id)[spec.spec_key] = spec.spec_value;
     });
 
     // Step 5: Combine the products with their related data
-    const finalProducts = products.map(product => ({
+    const finalProducts = products.map((product) => ({
       ...product,
       images: imagesByProductId.get(product.id) || [],
       features: featuresByProductId.get(product.id) || [],
