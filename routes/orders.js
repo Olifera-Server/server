@@ -3,6 +3,7 @@ const { body, validationResult } = require('express-validator');
 const { executeQuery, executeTransaction } = require('../config/database');
 const { authenticateToken, requireAdmin } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
+const {sendOrderConfirmationEmail} = require('../config/emailConfig')
 
 const router = express.Router();
 
@@ -366,6 +367,22 @@ router.post('/', authenticateToken, [
     // Since payment and cart clearing are handled separately or omitted,
     // we send the success response directly after creating the order.
 
+    // Send order confirmation email to admin
+    await sendOrderConfirmationEmail(
+      {
+        orderId: orderNumber,
+        customerName: `${shippingAddress.firstName} ${shippingAddress.lastName}`,
+        customerEmail: shippingAddress.email,
+        shippingAddress: `${shippingAddress.address}, ${shippingAddress.city}, ${shippingAddress.state} ${shippingAddress.zipCode}`,
+        items: orderItems,
+        totalAmount: totalAmount.toFixed(2),
+        status: 'pending',
+        shippingMethod: deliveryMethod,
+        phone: shippingAddress.phone
+      },
+      [process.env.ADMIN_EMAIL, shippingAddress.email]
+    );
+
     res.status(201).json({
       message: 'Order created successfully',
       order: {
@@ -407,11 +424,52 @@ router.put('/:id/status', [authenticateToken, requireAdmin], [
       return res.status(404).json({ message: 'Order not found' });
     }
 
+    // // Get full order details for email
+    // const [orderDetails, orderItems, user] = await Promise.all([
+    //   executeQuery(`
+    //     SELECT o.* 
+    //     FROM orders o
+    //     WHERE o.id = ?
+    //   `, [orderId]),
+    //   executeQuery(`
+    //     SELECT oi.*, p.name as product_name
+    //     FROM order_items oi
+    //     LEFT JOIN products p ON oi.product_id = p.id
+    //     WHERE oi.order_id = ?
+    //   `, [orderId]),
+    //   executeQuery(`
+    //     SELECT u.email, u.name 
+    //     FROM orders o
+    //     LEFT JOIN users u ON o.user_id = u.id
+    //     WHERE o.id = ?
+    //   `, [orderId])
+    // ]);
+
     // Update order status
     await executeQuery(
       'UPDATE orders SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
       [status, orderId]
     );
+
+    // Send status update email to admin
+    // await sendOrderConfirmationEmail(
+    //   {
+    //     orderId: orderDetails[0].order_number,
+    //     customerName: user[0].name,
+    //     customerEmail: user[0].email,
+    //     shippingAddress: `${orderDetails[0].shipping_address}, ${orderDetails[0].shipping_city}, ${orderDetails[0].shipping_state} ${orderDetails[0].shipping_zip_code}`,
+    //     items: orderItems.map(item => ({
+    //       product_name: item.product_name,
+    //       quantity: item.quantity,
+    //       product_price: item.product_price,
+    //       total_price: item.total_price
+    //     })),
+    //     totalAmount: orderDetails[0].total_amount,
+    //     status: status,
+    //     shippingMethod: orderDetails[0].shipping_method
+    //   },
+    //   process.env.ADMIN_EMAIL
+    // );
 
     res.json({ message: 'Order status updated successfully' });
   } catch (error) {
