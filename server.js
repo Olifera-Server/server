@@ -18,9 +18,13 @@ const wishlistRoutes = require('./routes/wishlist');
 const blogRoutes = require('./routes/blogs');
 const newsletterRoutes = require('./routes/newsletter');
 const contactRoutes = require('./routes/contact');
+const uploadRoutes = require('./routes/upload');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+
+// Serve static files from the 'uploads' directory
+app.use('/uploads', express.static('temp/uploads'));
 
 // Security middleware
 app.use(helmet());
@@ -50,6 +54,7 @@ app.use('/api/wishlist', wishlistRoutes);
 app.use('/api/blogs', blogRoutes);
 app.use('/api/newsletter', newsletterRoutes);
 app.use('/api/contact', contactRoutes);
+app.use('/api/upload', uploadRoutes);
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

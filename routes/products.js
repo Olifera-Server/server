@@ -7,6 +7,25 @@ const {
   optionalAuth,
 } = require("../middleware/auth");
 
+function generateSlug(name) {
+  const a =
+    "àáâäæãåāăąçćčđďèéêëēėęěğǵḧîïíīįìłḿñńǹňôöòóœøōõőṕŕřßśšşșťțûüùúūǘůűųẃẍÿýžźż·/_,:;";
+  const b =
+    "aaaaaaaaaacccddeeeeeeeegghiiiiiilmnnnnoooooooooprrsssssttuuuuuuuuuwxyyzzz------";
+  const p = new RegExp(a.split("").join("|"), "g");
+
+  return name
+    .toString()
+    .toLowerCase()
+    .replace(/\s+/g, "-") // Replace spaces with -
+    .replace(p, (c) => b.charAt(a.indexOf(c))) // Replace special characters
+    .replace(/&/g, "-and-") // Replace & with 'and'
+    .replace(/[^\w\-]+/g, "") // Remove all non-word chars
+    .replace(/\-\-+/g, "-") // Replace multiple - with single -
+    .replace(/^-+/, "") // Trim - from start of text
+    .replace(/-+$/, ""); // Trim - from end of text
+}
+
 const router = express.Router();
 
 // Get all products with filtering and pagination
@@ -119,11 +138,12 @@ router.get("/", optionalAuth, async (req, res) => {
       sortOrder = "ASC",
       minPrice,
       maxPrice,
+      isAdmin = false
     } = req.query;
 
     const offset = (page - 1) * limit;
     const params = [];
-    let whereClause = 'WHERE p.status = "active"';
+    let whereClause = isAdmin ? 'WHERE p.status like "%"' :'WHERE p.status = "active"';
 
     // Add category filter
     if (category && category !== "All") {
@@ -209,7 +229,7 @@ router.get("/", optionalAuth, async (req, res) => {
     const imagesQuery = `SELECT * FROM product_images WHERE product_id IN (${placeholders}) ORDER BY is_primary DESC, display_order ASC`;
     const featuresQuery = `SELECT * FROM product_features WHERE product_id IN (${placeholders}) ORDER BY display_order ASC`;
     const specsQuery = `SELECT * FROM product_specifications WHERE product_id IN (${placeholders})`;
-    console.log(productIds)
+    console.log(productIds);
 
     const [images, features, specifications] = await Promise.all([
       executeQuery(imagesQuery, productIds),
@@ -289,11 +309,117 @@ router.get("/featured", async (req, res) => {
 });
 
 // Get single product with all details
-router.get("/:id", optionalAuth, async (req, res) => {
-  try {
-    const productId = parseInt(req.params.id);
+// router.get("/:id", optionalAuth, async (req, res) => {
+//   try {
+//     const productId = parseInt(req.params.id);
 
-    // Get product details
+//     // Get product details
+//     const products = await executeQuery(
+//       `
+//       SELECT
+//         p.*,
+//         c.name as category_name
+//       FROM products p
+//       LEFT JOIN categories c ON p.category_id = c.id
+//       WHERE p.id = ? AND p.status = "active"
+//     `,
+//       [productId]
+//     );
+
+//     if (products.length === 0) {
+//       return res.status(404).json({ message: "Product not found" });
+//     }
+
+//     const product = products[0];
+
+//     // Get product images
+//     const images = await executeQuery(
+//       `
+//       SELECT image_url, is_primary, display_order
+//       FROM product_images
+//       WHERE product_id = ?
+//       ORDER BY is_primary DESC, display_order ASC
+//     `,
+//       [productId]
+//     );
+
+//     // Get product specifications
+//     const specifications = await executeQuery(
+//       `
+//       SELECT spec_key, spec_value
+//       FROM product_specifications
+//       WHERE product_id = ?
+//       ORDER BY spec_key
+//     `,
+//       [productId]
+//     );
+
+//     // Get product features
+//     const features = await executeQuery(
+//       `
+//       SELECT feature_text
+//       FROM product_features
+//       WHERE product_id = ?
+//       ORDER BY display_order ASC
+//     `,
+//       [productId]
+//     );
+
+//     // Get product reviews
+//     const reviews = await executeQuery(
+//       `
+//       SELECT
+//         pr.*,
+//         u.name as user_name
+//       FROM product_reviews pr
+//       LEFT JOIN users u ON pr.user_id = u.id
+//       WHERE pr.product_id = ?
+//       ORDER BY pr.created_at DESC
+//       LIMIT 10
+//     `,
+//       [productId]
+//     );
+
+//     // Check if product is in user's wishlist
+//     let isInWishlist = false;
+//     if (req.user) {
+//       const wishlistItems = await executeQuery(
+//         `
+//         SELECT id FROM wishlist WHERE user_id = ? AND product_id = ?
+//       `,
+//         [req.user.id, productId]
+//       );
+//       isInWishlist = wishlistItems.length > 0;
+//     }
+
+//     // Format specifications as object
+//     const specsObject = {};
+//     specifications.forEach((spec) => {
+//       specsObject[spec.spec_key] = spec.spec_value;
+//     });
+
+//     res.json({
+//       product: {
+//         ...product,
+//         images: images.map((img) => img.image_url),
+//         specifications: specsObject,
+//         features: features.map((f) => f.feature_text),
+//         reviews,
+//         isInWishlist,
+//       },
+//     });
+//   } catch (error) {
+//     console.error("Get product error:", error);
+//     res.status(500).json({ message: "Failed to fetch product" });
+//   }
+// });
+// This route now uses a slug, e.g., /products/black-salt-1kg
+router.get("/:slug", optionalAuth, async (req, res) => {
+  try {
+    const productSlug = req.params.slug;
+
+    // --- Step 1: Get the main product details using the SLUG ---
+    // We select the ID here so we can use it for all subsequent queries.
     const products = await executeQuery(
       `
       SELECT 
@@ -301,9 +427,9 @@ router.get("/:id", optionalAuth, async (req, res) => {
         c.name as category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.id = ? AND p.status = "active"
+      WHERE p.slug = ? AND p.status = "active"
     `,
-      [productId]
+      [productSlug]
     );
 
     if (products.length === 0) {
@@ -311,72 +437,49 @@ router.get("/:id", optionalAuth, async (req, res) => {
     }
 
     const product = products[0];
+    const productId = product.id; // <-- IMPORTANT: Get the ID for related data
 
-    // Get product images
-    const images = await executeQuery(
-      `
-      SELECT image_url, is_primary, display_order
-      FROM product_images
-      WHERE product_id = ?
-      ORDER BY is_primary DESC, display_order ASC
-    `,
-      [productId]
-    );
+    // --- Step 2: Fetch all related data in PARALLEL for better performance ---
+    const [images, specifications, features, reviews, wishlistItems] =
+      await Promise.all([
+        // Get product images
+        executeQuery(
+          `SELECT image_url FROM product_images WHERE product_id = ? ORDER BY is_primary DESC, display_order ASC`,
+          [productId]
+        ),
+        // Get product specifications
+        executeQuery(
+          `SELECT spec_key, spec_value FROM product_specifications WHERE product_id = ? ORDER BY spec_key`,
+          [productId]
+        ),
+        // Get product features
+        executeQuery(
+          `SELECT feature_text FROM product_features WHERE product_id = ? ORDER BY display_order ASC`,
+          [productId]
+        ),
+        // Get product reviews
+        executeQuery(
+          `SELECT pr.*, u.name as user_name FROM product_reviews pr LEFT JOIN users u ON pr.user_id = u.id WHERE pr.product_id = ? ORDER BY pr.created_at DESC LIMIT 10`,
+          [productId]
+        ),
+        // Check wishlist (only if user is logged in)
+        req.user
+          ? executeQuery(
+              `SELECT id FROM wishlist WHERE user_id = ? AND product_id = ?`,
+              [req.user.id, productId]
+            )
+          : Promise.resolve([]), // If no user, resolve immediately with an empty array
+      ]);
 
-    // Get product specifications
-    const specifications = await executeQuery(
-      `
-      SELECT spec_key, spec_value
-      FROM product_specifications
-      WHERE product_id = ?
-      ORDER BY spec_key
-    `,
-      [productId]
-    );
+    // --- Step 3: Format the data and send the response ---
 
-    // Get product features
-    const features = await executeQuery(
-      `
-      SELECT feature_text
-      FROM product_features
-      WHERE product_id = ?
-      ORDER BY display_order ASC
-    `,
-      [productId]
-    );
+    // Format specifications into a key-value object
+    const specsObject = specifications.reduce((obj, spec) => {
+      obj[spec.spec_key] = spec.spec_value;
+      return obj;
+    }, {});
 
-    // Get product reviews
-    const reviews = await executeQuery(
-      `
-      SELECT 
-        pr.*,
-        u.name as user_name
-      FROM product_reviews pr
-      LEFT JOIN users u ON pr.user_id = u.id
-      WHERE pr.product_id = ?
-      ORDER BY pr.created_at DESC
-      LIMIT 10
-    `,
-      [productId]
-    );
-
-    // Check if product is in user's wishlist
-    let isInWishlist = false;
-    if (req.user) {
-      const wishlistItems = await executeQuery(
-        `
-        SELECT id FROM wishlist WHERE user_id = ? AND product_id = ?
-      `,
-        [req.user.id, productId]
-      );
-      isInWishlist = wishlistItems.length > 0;
-    }
-
-    // Format specifications as object
-    const specsObject = {};
-    specifications.forEach((spec) => {
-      specsObject[spec.spec_key] = spec.spec_value;
-    });
+    const isInWishlist = wishlistItems.length > 0;
 
     res.json({
       product: {
@@ -389,7 +492,7 @@ router.get("/:id", optionalAuth, async (req, res) => {
       },
     });
   } catch (error) {
-    console.error("Get product error:", error);
+    console.error("Get product by slug error:", error);
     res.status(500).json({ message: "Failed to fetch product" });
   }
 });
@@ -448,12 +551,13 @@ router.post(
       }
 
       // Create product
+      const slug = generateSlug(name);
       const result = await executeQuery(
         `
-      INSERT INTO products (name, description, price, original_price, category_id, stock, badge)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO products (name, description, price, original_price, category_id, stock, badge, slug)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `,
-        [name, description, price, original_price, category_id, stock, badge]
+        [name, description, price, original_price, category_id, stock, badge, slug]
       );
 
       const productId = result.insertId;
@@ -547,6 +651,9 @@ router.put(
         stock,
         badge,
         status,
+        images,
+        features,
+        specifications,
       } = req.body;
 
       // Check if product exists
@@ -586,6 +693,44 @@ router.put(
           productId,
         ]
       );
+
+      // Clear and re-add images, features, and specs
+      await executeQuery("DELETE FROM product_images WHERE product_id = ?", [
+        productId,
+      ]);
+      if (images && images.length > 0) {
+        for (let i = 0; i < images.length; i++) {
+          await executeQuery(
+            `INSERT INTO product_images (product_id, image_url, is_primary, display_order) VALUES (?, ?, ?, ?)`,
+            [productId, images[i], i === 0, i]
+          );
+        }
+      }
+
+      await executeQuery("DELETE FROM product_features WHERE product_id = ?", [
+        productId,
+      ]);
+      if (features && features.length > 0) {
+        for (let i = 0; i < features.length; i++) {
+          await executeQuery(
+            `INSERT INTO product_features (product_id, feature_text, display_order) VALUES (?, ?, ?)`,
+            [productId, features[i], i]
+          );
+        }
+      }
+
+      await executeQuery(
+        "DELETE FROM product_specifications WHERE product_id = ?",
+        [productId]
+      );
+      if (specifications) {
+        for (const [key, value] of Object.entries(specifications)) {
+          await executeQuery(
+            `INSERT INTO product_specifications (product_id, spec_key, spec_value) VALUES (?, ?, ?)`,
+            [productId, key, value]
+          );
+        }
+      }
 
       res.json({ message: "Product updated successfully" });
     } catch (error) {
